@@ -1,7 +1,7 @@
 # Overview
 swr, is a software rasterizer/renderer.
 
-# Building and running (only to see benchmark result)
+# Building and running
 ```bash
 mkdir build
 cd build
