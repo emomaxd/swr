@@ -45,5 +45,16 @@ typedef struct {
     float y; // Y coordinate
 } vec2;
 
+typedef struct {
+    float x, y, z;
+} vec3;
+
+typedef struct {
+    float x, y, z, w;
+} vec4;
+
+typedef struct {
+    float m[4][4];
+} mat4;
 
 #endif // CORE_H
