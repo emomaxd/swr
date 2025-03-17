@@ -41,8 +41,8 @@ struct image_u32
 };
 
 typedef struct {
-    float x; // X coordinate
-    float y; // Y coordinate
+    float x;
+    float y;
 } vec2;
 
 typedef struct {

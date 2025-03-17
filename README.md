@@ -6,7 +6,7 @@ swr, is a software rasterizer/renderer.
 mkdir build
 cd build
 cmake ..
-cmake --build . # or make
+cmake --build .
 ./swr
 ```
 

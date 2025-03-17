@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "core.h"
+#include "pipeline.h"
 
 /* Color unpacking macros */
 #define RED(color)   ((color >> 16) & 0xFF)
