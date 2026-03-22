@@ -4,6 +4,7 @@
 #include <float.h>
 
 #include "core.h"
+#include "obj_loader.h"
 
 /* Color unpacking macros */
 #define RED(color)   ((color >> 16) & 0xFF)
@@ -35,7 +36,7 @@ static void ClearImage(image_u32 Image, u32 Color) {
 }
 
 static void
-WriteImage(image_u32 Image, char *FileName)
+WriteImage(image_u32 Image, const char *FileName)
 {
     u32 OutputPixelSize = GetTotalPixelSize(Image);
 
@@ -267,6 +268,10 @@ static mat4 MultiplyMatrices(mat4 a, mat4 b) {
     return result;
 }
 
+/* ============================================================
+ * Edge functions & fill rule
+ * ============================================================ */
+
 bool is_top_left(vec2 start, vec2 end) {
     vec2 edge = { end.x - start.x, end.y - start.y };
     bool is_top_edge = edge.y == 0 && edge.x > 0;
@@ -280,77 +285,40 @@ float edge_cross(vec2 a, vec2 b, vec2 p) {
     return ab.x * ap.y - ab.y * ap.x;
 }
 
-static void DrawLine(image_u32 Image, vec2 start, vec2 end, u32 Color) {
-    int x0 = (int)start.x;
-    int y0 = (int)start.y;
-    int x1 = (int)end.x;
-    int y1 = (int)end.y;
-
-    // Calculate the differences and error
-    int dx = abs(x1 - x0);
-    int dy = abs(y1 - y0);
-    int sx = (x0 < x1) ? 1 : -1; // Step in x direction
-    int sy = (y0 < y1) ? 1 : -1; // Step in y direction
-    int err = dx - dy; // Error variable
-
-    while (1) {
-        // Set the pixel
-        if (x0 >= 0 && x0 < Image.Width && y0 >= 0 && y0 < Image.Height) {
-            Image.Pixels[y0 * Image.Width + x0] = Color;
-        }
-
-        // Check if we've reached the end point
-        if (x0 == x1 && y0 == y1) break;
-
-        // Calculate error and adjust coordinates
-        int err2 = err * 2;
-        if (err2 > -dy) { // Move x
-            err -= dy;
-            x0 += sx;
-        }
-        if (err2 < dx) { // Move y
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
+/* ============================================================
+ * 2D triangle rasterizer (original, kept for backwards compat)
+ * ============================================================ */
 
 void RasterizeTriangle(image_u32 Image, vec2 v0, vec2 v1, vec2 v2, u32 c0, u32 c1, u32 c2) {
-    /* Calculate bounding box */
     int minX = (int)fminf(fminf(v0.x, v1.x), v2.x);
     int maxX = (int)fmaxf(fmaxf(v0.x, v1.x), v2.x);
     int minY = (int)fminf(fminf(v0.y, v1.y), v2.y);
     int maxY = (int)fmaxf(fmaxf(v0.y, v1.y), v2.y);
 
-    /* Clamp to image bounds */
-    minX = fmax(minX, 0);
-    maxX = fmin(maxX, Image.Width - 1);
-    minY = fmax(minY, 0);
-    maxY = fmin(maxY, Image.Height - 1);
-  
-    // Compute the constant delta_s that will be used for the horizontal and vertical steps
+    minX = (int)fmaxf((float)minX, 0.0f);
+    maxX = (int)fminf((float)maxX, (float)(Image.Width - 1));
+    minY = (int)fmaxf((float)minY, 0.0f);
+    maxY = (int)fminf((float)maxY, (float)(Image.Height - 1));
+
     float delta_w0_col = (v1.y - v2.y);
     float delta_w1_col = (v2.y - v0.y);
     float delta_w2_col = (v0.y - v1.y);
     float delta_w0_row = (v2.x - v1.x);
     float delta_w1_row = (v0.x - v2.x);
     float delta_w2_row = (v1.x - v0.x);
-    
-    // Rasterization fill rule, not 100% precise due to floating point innacuracy
-    float bias0 = is_top_left(v1, v2) ? 0 : -0.0001;
-    float bias1 = is_top_left(v2, v0) ? 0 : -0.0001;
-    float bias2 = is_top_left(v0, v1) ? 0 : -0.0001;
-    
+
+    float bias0 = is_top_left(v1, v2) ? 0 : -0.0001f;
+    float bias1 = is_top_left(v2, v0) ? 0 : -0.0001f;
+    float bias2 = is_top_left(v0, v1) ? 0 : -0.0001f;
+
     vec2 p0 = { minX + 0.5f , minY + 0.5f };
     float w0_row = edge_cross(v1, v2, p0) + bias0;
     float w1_row = edge_cross(v2, v0, p0) + bias1;
-    float w2_row = edge_cross(v0, v1, p0) + bias2;   
-    
-    /* Precompute total area of the triangle */
+    float w2_row = edge_cross(v0, v1, p0) + bias2;
+
     float totalArea = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
     float invTotalArea = 1.0f / totalArea;
 
-    /* Rasterize the triangle */
     for (int y = minY; y <= maxY; y++) {
         float w0 = w0_row;
         float w1 = w1_row;
@@ -359,44 +327,342 @@ void RasterizeTriangle(image_u32 Image, vec2 v0, vec2 v1, vec2 v2, u32 c0, u32 c
             bool is_inside = w0 >= 0 && w1 >= 0 && w2 >= 0;
             if (is_inside)
             {
-                /* Calculate barycentric coordinates */
                 float alpha = w0 * invTotalArea;
                 float beta  = w1 * invTotalArea;
                 float gamma = 1.0f - alpha - beta;
 
-                /* Interpolate color using alpha, beta, gamma */
                 int a = (int)(ALPHA(c0) * alpha + ALPHA(c1) * beta + ALPHA(c2) * gamma);
                 int r = (int)(RED(c0) * alpha + RED(c1) * beta + RED(c2) * gamma);
                 int g = (int)(GREEN(c0) * alpha + GREEN(c1) * beta + GREEN(c2) * gamma);
                 int b = (int)(BLUE(c0) * alpha + BLUE(c1) * beta + BLUE(c2) * gamma);
 
-                /* Pack interpolated color and set the pixel */
                 Image.Pixels[y * Image.Width + x] = PackColor(a, r, g, b);
             }
             w0 += delta_w0_col;
             w1 += delta_w1_col;
             w2 += delta_w2_col;
         }
-    w0_row += delta_w0_row;
-    w1_row += delta_w1_row;
-    w2_row += delta_w2_row;
+        w0_row += delta_w0_row;
+        w1_row += delta_w1_row;
+        w2_row += delta_w2_row;
     }
 }
 
+/* ============================================================
+ * 3D triangle rasterizer with:
+ *   - Depth buffering (Z-buffer)
+ *   - Perspective-correct texture mapping
+ *   - Simple directional lighting
+ * ============================================================ */
 
-int main() {
-    image_u32 Image = AllocateImage(800, 600);
-    ClearImage(Image, 0xFFFFFFFF); // Clear to white
+void RasterizeTriangle3D(image_u32 Image, depth_buffer DepthBuf,
+                         vec4 clip0, vec4 clip1, vec4 clip2,
+                         vec2 uv0, vec2 uv1, vec2 uv2,
+                         vec3 n0, vec3 n1, vec3 n2,
+                         texture *tex, vec3 lightDir)
+{
+    /* Perspective divide: clip space -> NDC */
+    float inv_w0 = 1.0f / clip0.w;
+    float inv_w1 = 1.0f / clip1.w;
+    float inv_w2 = 1.0f / clip2.w;
 
-    vec2 v0 = {200.0f, 100.0f};
-    vec2 v1 = {600.0f, 300.0f};
-    vec2 v2 = {300.0f, 500.0f};
+    vec3 ndc0 = { clip0.x * inv_w0, clip0.y * inv_w0, clip0.z * inv_w0 };
+    vec3 ndc1 = { clip1.x * inv_w1, clip1.y * inv_w1, clip1.z * inv_w1 };
+    vec3 ndc2 = { clip2.x * inv_w2, clip2.y * inv_w2, clip2.z * inv_w2 };
 
-    RasterizeTriangle(Image, v0, v1, v2, 0xFFFF0000, 0xFF00FF00, 0xFF0000FF); // A-R-G-B
+    /* NDC -> Screen coordinates */
+    float halfW = Image.Width * 0.5f;
+    float halfH = Image.Height * 0.5f;
+
+    vec2 s0 = { (ndc0.x + 1.0f) * halfW, (ndc0.y + 1.0f) * halfH };
+    vec2 s1 = { (ndc1.x + 1.0f) * halfW, (ndc1.y + 1.0f) * halfH };
+    vec2 s2 = { (ndc2.x + 1.0f) * halfW, (ndc2.y + 1.0f) * halfH };
+
+    /* Bounding box */
+    int minX = (int)fminf(fminf(s0.x, s1.x), s2.x);
+    int maxX = (int)fmaxf(fmaxf(s0.x, s1.x), s2.x);
+    int minY = (int)fminf(fminf(s0.y, s1.y), s2.y);
+    int maxY = (int)fmaxf(fmaxf(s0.y, s1.y), s2.y);
+
+    minX = (int)fmaxf((float)minX, 0.0f);
+    maxX = (int)fminf((float)maxX, (float)(Image.Width - 1));
+    minY = (int)fmaxf((float)minY, 0.0f);
+    maxY = (int)fminf((float)maxY, (float)(Image.Height - 1));
+
+    /* Edge function deltas for incremental traversal */
+    float delta_w0_col = (s1.y - s2.y);
+    float delta_w1_col = (s2.y - s0.y);
+    float delta_w2_col = (s0.y - s1.y);
+    float delta_w0_row = (s2.x - s1.x);
+    float delta_w1_row = (s0.x - s2.x);
+    float delta_w2_row = (s1.x - s0.x);
+
+    float bias0 = is_top_left(s1, s2) ? 0 : -0.0001f;
+    float bias1 = is_top_left(s2, s0) ? 0 : -0.0001f;
+    float bias2 = is_top_left(s0, s1) ? 0 : -0.0001f;
+
+    vec2 p0 = { minX + 0.5f, minY + 0.5f };
+    float w0_row = edge_cross(s1, s2, p0) + bias0;
+    float w1_row = edge_cross(s2, s0, p0) + bias1;
+    float w2_row = edge_cross(s0, s1, p0) + bias2;
+
+    float totalArea = (s1.x - s0.x) * (s2.y - s0.y) - (s2.x - s0.x) * (s1.y - s0.y);
+    if (totalArea <= 0) return; /* Back-face culling */
+    float invTotalArea = 1.0f / totalArea;
+
+    /* Pre-divide texture coords and depth by w for perspective-correct interpolation */
+    float u0_over_w = uv0.x * inv_w0, v0_over_w = uv0.y * inv_w0;
+    float u1_over_w = uv1.x * inv_w1, v1_over_w = uv1.y * inv_w1;
+    float u2_over_w = uv2.x * inv_w2, v2_over_w = uv2.y * inv_w2;
+
+    float z0_over_w = ndc0.z * inv_w0, z1_over_w = ndc1.z * inv_w1, z2_over_w = ndc2.z * inv_w2;
+
+    for (int y = minY; y <= maxY; y++) {
+        float w0 = w0_row;
+        float w1 = w1_row;
+        float w2 = w2_row;
+
+        for (int x = minX; x <= maxX; x++) {
+            if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                float alpha = w0 * invTotalArea;
+                float beta  = w1 * invTotalArea;
+                float gamma = 1.0f - alpha - beta;
+
+                /* Perspective-correct interpolation */
+                float one_over_w = alpha * inv_w0 + beta * inv_w1 + gamma * inv_w2;
+                float w_correct = 1.0f / one_over_w;
+
+                /* Interpolate depth */
+                float depth = (alpha * z0_over_w + beta * z1_over_w + gamma * z2_over_w) * w_correct;
+
+                /* Z-buffer test */
+                int pixelIndex = y * Image.Width + x;
+                if (depth < DepthBuf.Data[pixelIndex]) {
+                    DepthBuf.Data[pixelIndex] = depth;
+
+                    u32 color;
+                    if (tex) {
+                        /* Perspective-correct texture coordinates */
+                        float u = (alpha * u0_over_w + beta * u1_over_w + gamma * u2_over_w) * w_correct;
+                        float v = (alpha * v0_over_w + beta * v1_over_w + gamma * v2_over_w) * w_correct;
+
+                        color = SampleTexture(*tex, u, v);
+                    } else {
+                        color = 0xFFFFFFFF;
+                    }
+
+                    /* Interpolate normal for lighting */
+                    vec3 normal;
+                    normal.x = alpha * n0.x + beta * n1.x + gamma * n2.x;
+                    normal.y = alpha * n0.y + beta * n1.y + gamma * n2.y;
+                    normal.z = alpha * n0.z + beta * n1.z + gamma * n2.z;
+                    normal = Vec3Normalize(normal);
+
+                    /* Simple diffuse lighting */
+                    float ndotl = Vec3Dot(normal, lightDir);
+                    float diffuse = fmaxf(ndotl, 0.0f);
+                    float ambient = 0.15f;
+                    float intensity = fminf(ambient + diffuse * 0.85f, 1.0f);
+
+                    int r = (int)(RED(color) * intensity);
+                    int g = (int)(GREEN(color) * intensity);
+                    int b = (int)(BLUE(color) * intensity);
+
+                    Image.Pixels[pixelIndex] = PackColor(255, r, g, b);
+                }
+            }
+            w0 += delta_w0_col;
+            w1 += delta_w1_col;
+            w2 += delta_w2_col;
+        }
+        w0_row += delta_w0_row;
+        w1_row += delta_w1_row;
+        w2_row += delta_w2_row;
+    }
+}
+
+/* ============================================================
+ * 3D rendering pipeline
+ * ============================================================ */
+
+static void RenderMesh(image_u32 Image, depth_buffer DepthBuf,
+                       mesh *m, mat4 mvp, texture *tex, vec3 lightDir)
+{
+    for (int i = 0; i < m->triangleCount; i++) {
+        triangle3d tri = m->triangles[i];
+        vertex3d v0 = m->vertices[tri.v[0]];
+        vertex3d v1 = m->vertices[tri.v[1]];
+        vertex3d v2 = m->vertices[tri.v[2]];
+
+        vec4 p0 = {v0.position.x, v0.position.y, v0.position.z, 1.0f};
+        vec4 p1 = {v1.position.x, v1.position.y, v1.position.z, 1.0f};
+        vec4 p2 = {v2.position.x, v2.position.y, v2.position.z, 1.0f};
+
+        vec4 clip0 = MultiplyMatrixAndVector(mvp, p0);
+        vec4 clip1 = MultiplyMatrixAndVector(mvp, p1);
+        vec4 clip2 = MultiplyMatrixAndVector(mvp, p2);
+
+        /* Simple near-plane clipping: skip triangles behind camera */
+        if (clip0.w < 0.001f && clip1.w < 0.001f && clip2.w < 0.001f) continue;
+        if (clip0.w < 0.001f || clip1.w < 0.001f || clip2.w < 0.001f) continue;
+
+        RasterizeTriangle3D(Image, DepthBuf,
+                            clip0, clip1, clip2,
+                            v0.texcoord, v1.texcoord, v2.texcoord,
+                            v0.normal, v1.normal, v2.normal,
+                            tex, lightDir);
+    }
+}
+
+/* ============================================================
+ * Built-in cube mesh for demo
+ * ============================================================ */
+
+static mesh CreateCubeMesh() {
+    mesh m = {};
+    m.vertexCount = 36;
+    m.vertices = (vertex3d *)malloc(m.vertexCount * sizeof(vertex3d));
+    m.triangleCount = 12;
+    m.triangles = (triangle3d *)malloc(m.triangleCount * sizeof(triangle3d));
+
+    struct { vec3 p; vec2 t; vec3 n; } cubeData[] = {
+        /* Front face (z = +1) */
+        {{-1, -1,  1}, {0, 0}, { 0,  0,  1}},
+        {{ 1, -1,  1}, {1, 0}, { 0,  0,  1}},
+        {{ 1,  1,  1}, {1, 1}, { 0,  0,  1}},
+        {{-1, -1,  1}, {0, 0}, { 0,  0,  1}},
+        {{ 1,  1,  1}, {1, 1}, { 0,  0,  1}},
+        {{-1,  1,  1}, {0, 1}, { 0,  0,  1}},
+        /* Back face (z = -1) */
+        {{ 1, -1, -1}, {0, 0}, { 0,  0, -1}},
+        {{-1, -1, -1}, {1, 0}, { 0,  0, -1}},
+        {{-1,  1, -1}, {1, 1}, { 0,  0, -1}},
+        {{ 1, -1, -1}, {0, 0}, { 0,  0, -1}},
+        {{-1,  1, -1}, {1, 1}, { 0,  0, -1}},
+        {{ 1,  1, -1}, {0, 1}, { 0,  0, -1}},
+        /* Top face (y = +1) */
+        {{-1,  1,  1}, {0, 0}, { 0,  1,  0}},
+        {{ 1,  1,  1}, {1, 0}, { 0,  1,  0}},
+        {{ 1,  1, -1}, {1, 1}, { 0,  1,  0}},
+        {{-1,  1,  1}, {0, 0}, { 0,  1,  0}},
+        {{ 1,  1, -1}, {1, 1}, { 0,  1,  0}},
+        {{-1,  1, -1}, {0, 1}, { 0,  1,  0}},
+        /* Bottom face (y = -1) */
+        {{-1, -1, -1}, {0, 0}, { 0, -1,  0}},
+        {{ 1, -1, -1}, {1, 0}, { 0, -1,  0}},
+        {{ 1, -1,  1}, {1, 1}, { 0, -1,  0}},
+        {{-1, -1, -1}, {0, 0}, { 0, -1,  0}},
+        {{ 1, -1,  1}, {1, 1}, { 0, -1,  0}},
+        {{-1, -1,  1}, {0, 1}, { 0, -1,  0}},
+        /* Right face (x = +1) */
+        {{ 1, -1,  1}, {0, 0}, { 1,  0,  0}},
+        {{ 1, -1, -1}, {1, 0}, { 1,  0,  0}},
+        {{ 1,  1, -1}, {1, 1}, { 1,  0,  0}},
+        {{ 1, -1,  1}, {0, 0}, { 1,  0,  0}},
+        {{ 1,  1, -1}, {1, 1}, { 1,  0,  0}},
+        {{ 1,  1,  1}, {0, 1}, { 1,  0,  0}},
+        /* Left face (x = -1) */
+        {{-1, -1, -1}, {0, 0}, {-1,  0,  0}},
+        {{-1, -1,  1}, {1, 0}, {-1,  0,  0}},
+        {{-1,  1,  1}, {1, 1}, {-1,  0,  0}},
+        {{-1, -1, -1}, {0, 0}, {-1,  0,  0}},
+        {{-1,  1,  1}, {1, 1}, {-1,  0,  0}},
+        {{-1,  1, -1}, {0, 1}, {-1,  0,  0}},
+    };
+
+    for (int i = 0; i < 36; i++) {
+        m.vertices[i].position = cubeData[i].p;
+        m.vertices[i].texcoord = cubeData[i].t;
+        m.vertices[i].normal = cubeData[i].n;
+    }
+
+    for (int i = 0; i < 12; i++) {
+        m.triangles[i].v[0] = i * 3;
+        m.triangles[i].v[1] = i * 3 + 1;
+        m.triangles[i].v[2] = i * 3 + 2;
+    }
+
+    return m;
+}
+
+/* ============================================================
+ * Main
+ * ============================================================ */
+
+int main(int argc, char **argv) {
+    const u32 WIDTH = 800;
+    const u32 HEIGHT = 600;
+
+    image_u32 Image = AllocateImage(WIDTH, HEIGHT);
+    depth_buffer DepthBuf = AllocateDepthBuffer(WIDTH, HEIGHT);
+
+    ClearImage(Image, PackColor(255, 30, 30, 40));
+    ClearDepthBuffer(DepthBuf);
+
+    /* Generate checkerboard texture */
+    texture checkerTex = GenerateCheckerTexture(256, 256, 32, 0xFF2288DD, 0xFFEEEEEE);
+
+    /* Load mesh: from OBJ file or built-in cube */
+    mesh cubeMesh;
+    bool loadedOBJ = false;
+    if (argc > 1) {
+        cubeMesh = LoadOBJ(argv[1]);
+        if (cubeMesh.triangleCount > 0) {
+            loadedOBJ = true;
+        }
+    }
+    if (!loadedOBJ) {
+        cubeMesh = CreateCubeMesh();
+        printf("[INFO] Using built-in cube mesh\n");
+    }
+
+    /* Load texture from BMP file if provided */
+    texture *renderTex = &checkerTex;
+    texture fileTex = {};
+    if (argc > 2) {
+        fileTex = LoadBMPTexture(argv[2]);
+        renderTex = &fileTex;
+    }
+
+    /* Camera setup */
+    vec3 eye = {3.0f, 2.5f, 3.0f};
+    vec3 target = {0.0f, 0.0f, 0.0f};
+    vec3 up = {0.0f, 1.0f, 0.0f};
+
+    /* Build transform pipeline: Model -> View -> Projection */
+    float fov = 60.0f * 3.14159265f / 180.0f;
+    float aspect = (float)WIDTH / (float)HEIGHT;
+    float nearPlane = 0.1f;
+    float farPlane = 100.0f;
+
+    mat4 model = MultiplyMatrices(RotationYMatrix(0.5f), RotationXMatrix(0.3f));
+    mat4 view = LookAtMatrix(eye, target, up);
+    mat4 projection = PerspectiveMatrix(fov, aspect, nearPlane, farPlane);
+
+    mat4 mv = MultiplyMatrices(view, model);
+    mat4 mvp = MultiplyMatrices(projection, mv);
+
+    /* Light direction (normalized, pointing from top-right-front) */
+    vec3 lightDir = Vec3Normalize({0.5f, 0.8f, 0.6f});
+
+    /* Render the mesh */
+    RenderMesh(Image, DepthBuf, &cubeMesh, mvp, renderTex, lightDir);
+
+    /* Also render original 2D triangle to show backward compatibility */
+    vec2 tv0 = {50.0f, 50.0f};
+    vec2 tv1 = {150.0f, 50.0f};
+    vec2 tv2 = {100.0f, 150.0f};
+    RasterizeTriangle(Image, tv0, tv1, tv2, 0xFFFF0000, 0xFF00FF00, 0xFF0000FF);
 
     WriteImage(Image, "output.bmp");
+    printf("[INFO] Rendered to output.bmp (%ux%u)\n", WIDTH, HEIGHT);
 
+    /* Cleanup */
+    FreeMesh(&cubeMesh);
     free(Image.Pixels);
+    free(DepthBuf.Data);
+    free(checkerTex.Pixels);
+    if (fileTex.Pixels) free(fileTex.Pixels);
 
     return 0;
 }
