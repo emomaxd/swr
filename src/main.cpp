@@ -71,8 +71,13 @@ WriteImage(image_u32 Image, char *FileName)
 
 }
 
+/* ============================================================
+ * Matrix operations (fixed for column-vector convention: M * v)
+ * Layout: m[row][col]
+ * ============================================================ */
+
 static mat4 IdentityMatrix() {
-    mat4 result = {0};
+    mat4 result = {};
     for (int i = 0; i < 4; ++i) {
         result.m[i][i] = 1.0f;
     }
@@ -81,14 +86,14 @@ static mat4 IdentityMatrix() {
 
 static mat4 TranslationMatrix(float x, float y, float z) {
     mat4 result = IdentityMatrix();
-    result.m[3][0] = x;
-    result.m[3][1] = y;
-    result.m[3][2] = z;
+    result.m[0][3] = x;
+    result.m[1][3] = y;
+    result.m[2][3] = z;
     return result;
 }
 
 static mat4 ScalingMatrix(float x, float y, float z) {
-    mat4 result = {0};
+    mat4 result = {};
     result.m[0][0] = x;
     result.m[1][1] = y;
     result.m[2][2] = z;
@@ -98,8 +103,8 @@ static mat4 ScalingMatrix(float x, float y, float z) {
 
 static mat4 RotationXMatrix(float angle) {
     mat4 result = IdentityMatrix();
-    float c = cos(angle);
-    float s = sin(angle);
+    float c = cosf(angle);
+    float s = sinf(angle);
     result.m[1][1] = c;
     result.m[1][2] = -s;
     result.m[2][1] = s;
@@ -109,8 +114,8 @@ static mat4 RotationXMatrix(float angle) {
 
 static mat4 RotationYMatrix(float angle) {
     mat4 result = IdentityMatrix();
-    float c = cos(angle);
-    float s = sin(angle);
+    float c = cosf(angle);
+    float s = sinf(angle);
     result.m[0][0] = c;
     result.m[0][2] = s;
     result.m[2][0] = -s;
@@ -120,8 +125,8 @@ static mat4 RotationYMatrix(float angle) {
 
 static mat4 RotationZMatrix(float angle) {
     mat4 result = IdentityMatrix();
-    float c = cos(angle);
-    float s = sin(angle);
+    float c = cosf(angle);
+    float s = sinf(angle);
     result.m[0][0] = c;
     result.m[0][1] = -s;
     result.m[1][0] = s;
@@ -129,33 +134,45 @@ static mat4 RotationZMatrix(float angle) {
     return result;
 }
 
-static mat4 PerspectiveMatrix(float fov, float aspect, float near, float far) {
-    mat4 result = {0};
-    float f = 1.0f / tan(fov / 2);
-    
+static mat4 PerspectiveMatrix(float fov, float aspect, float nearPlane, float farPlane) {
+    mat4 result = {};
+    float f = 1.0f / tanf(fov / 2.0f);
+
     result.m[0][0] = f / aspect;
     result.m[1][1] = f;
-    result.m[2][2] = (far + near) / (near - far);
-    result.m[2][3] = (2 * far * near) / (near - far);
-    result.m[3][2] = -1;
-    
+    result.m[2][2] = (farPlane + nearPlane) / (nearPlane - farPlane);
+    result.m[2][3] = (2.0f * farPlane * nearPlane) / (nearPlane - farPlane);
+    result.m[3][2] = -1.0f;
+
     return result;
 }
 
-static vec4 MultiplyMatrixAndVector(mat4 mat, vec4 vec) {
-    vec4 result = {0};
-    for (int i = 0; i < 4; ++i) {
-        result.x += mat.m[i][0] * vec.x;
-        result.y += mat.m[i][1] * vec.x;
-        result.z += mat.m[i][2] * vec.x;
-        result.w += mat.m[i][3] * vec.x;
-    }
+static mat4 LookAtMatrix(vec3 eye, vec3 target, vec3 up) {
+    vec3 f = Vec3Normalize(Vec3Sub(target, eye));
+    vec3 r = Vec3Normalize(Vec3Cross(f, up));
+    vec3 u = Vec3Cross(r, f);
+
+    mat4 result = {};
+    result.m[0][0] = r.x;   result.m[0][1] = r.y;   result.m[0][2] = r.z;   result.m[0][3] = -Vec3Dot(r, eye);
+    result.m[1][0] = u.x;   result.m[1][1] = u.y;   result.m[1][2] = u.z;   result.m[1][3] = -Vec3Dot(u, eye);
+    result.m[2][0] = -f.x;  result.m[2][1] = -f.y;  result.m[2][2] = -f.z;  result.m[2][3] =  Vec3Dot(f, eye);
+    result.m[3][3] = 1.0f;
+
+    return result;
+}
+
+static vec4 MultiplyMatrixAndVector(mat4 mat, vec4 v) {
+    vec4 result;
+    result.x = mat.m[0][0] * v.x + mat.m[0][1] * v.y + mat.m[0][2] * v.z + mat.m[0][3] * v.w;
+    result.y = mat.m[1][0] * v.x + mat.m[1][1] * v.y + mat.m[1][2] * v.z + mat.m[1][3] * v.w;
+    result.z = mat.m[2][0] * v.x + mat.m[2][1] * v.y + mat.m[2][2] * v.z + mat.m[2][3] * v.w;
+    result.w = mat.m[3][0] * v.x + mat.m[3][1] * v.y + mat.m[3][2] * v.z + mat.m[3][3] * v.w;
     return result;
 }
 
 static mat4 MultiplyMatrices(mat4 a, mat4 b) {
-    mat4 result = {0};
-    
+    mat4 result = {};
+
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
             result.m[i][j] = a.m[i][0] * b.m[0][j] +
@@ -164,7 +181,7 @@ static mat4 MultiplyMatrices(mat4 a, mat4 b) {
                              a.m[i][3] * b.m[3][j];
         }
     }
-    
+
     return result;
 }
 
