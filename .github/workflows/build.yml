@@ -1,0 +1,10 @@
+# .github/workflows/build.yml
+name: Build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build && cmake --build build
+
