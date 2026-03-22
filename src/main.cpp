@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <float.h>
 
 #include "core.h"
 
@@ -69,6 +70,24 @@ WriteImage(image_u32 Image, char *FileName)
     }
 
 
+}
+
+/* ============================================================
+ * Depth buffer
+ * ============================================================ */
+
+static depth_buffer AllocateDepthBuffer(u32 Width, u32 Height) {
+    depth_buffer db = {};
+    db.Width = Width;
+    db.Height = Height;
+    db.Data = (float *)malloc(Width * Height * sizeof(float));
+    return db;
+}
+
+static void ClearDepthBuffer(depth_buffer db) {
+    for (u32 i = 0; i < db.Width * db.Height; ++i) {
+        db.Data[i] = FLT_MAX;
+    }
 }
 
 /* ============================================================
