@@ -91,6 +91,69 @@ static void ClearDepthBuffer(depth_buffer db) {
 }
 
 /* ============================================================
+ * Texture
+ * ============================================================ */
+
+static texture GenerateCheckerTexture(u32 Width, u32 Height, u32 CellSize, u32 Color1, u32 Color2) {
+    texture tex = {};
+    tex.Width = Width;
+    tex.Height = Height;
+    tex.Pixels = (u32 *)malloc(Width * Height * sizeof(u32));
+
+    for (u32 y = 0; y < Height; y++) {
+        for (u32 x = 0; x < Width; x++) {
+            bool checker = ((x / CellSize) + (y / CellSize)) % 2 == 0;
+            tex.Pixels[y * Width + x] = checker ? Color1 : Color2;
+        }
+    }
+    return tex;
+}
+
+static u32 SampleTexture(texture tex, float u, float v) {
+    /* Wrap UV coordinates to [0, 1) */
+    u = u - floorf(u);
+    v = v - floorf(v);
+
+    int tx = (int)(u * (tex.Width - 1));
+    int ty = (int)(v * (tex.Height - 1));
+
+    tx = tx < 0 ? 0 : (tx >= (int)tex.Width ? (int)tex.Width - 1 : tx);
+    ty = ty < 0 ? 0 : (ty >= (int)tex.Height ? (int)tex.Height - 1 : ty);
+
+    return tex.Pixels[ty * tex.Width + tx];
+}
+
+static texture LoadBMPTexture(const char *filename) {
+    texture tex = {};
+
+    FILE *f = fopen(filename, "rb");
+    if (!f) {
+        fprintf(stderr, "[WARN] Cannot open texture: %s, using fallback\n", filename);
+        return GenerateCheckerTexture(64, 64, 8, 0xFFFFFFFF, 0xFF808080);
+    }
+
+    bitmap_header header;
+    fread(&header, sizeof(header), 1, f);
+
+    if (header.FileType != 0x4D42 || header.BitsPerPixel != 32) {
+        fprintf(stderr, "[WARN] Unsupported BMP format in %s, using fallback\n", filename);
+        fclose(f);
+        return GenerateCheckerTexture(64, 64, 8, 0xFFFFFFFF, 0xFF808080);
+    }
+
+    tex.Width = header.Width;
+    tex.Height = abs(header.Height);
+    tex.Pixels = (u32 *)malloc(tex.Width * tex.Height * sizeof(u32));
+
+    fseek(f, header.BitmapOffset, SEEK_SET);
+    fread(tex.Pixels, sizeof(u32), tex.Width * tex.Height, f);
+    fclose(f);
+
+    printf("[INFO] Loaded texture: %s (%ux%u)\n", filename, tex.Width, tex.Height);
+    return tex;
+}
+
+/* ============================================================
  * Matrix operations (fixed for column-vector convention: M * v)
  * Layout: m[row][col]
  * ============================================================ */
